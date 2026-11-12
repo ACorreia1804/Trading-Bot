@@ -13,5 +13,20 @@ services:
       - dbdata:/var/lib/postgresql/data
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
 
+  bot:
+    build: .
+    container_name: trading-bot
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      BINANCE_TESTNET_KEY: ${BINANCE_TESTNET_KEY}
+      BINANCE_TESTNET_SECRET: ${BINANCE_TESTNET_SECRET}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_URL: jdbc:postgresql://db:5432/trading
+    volumes:
+      - botdata:/data
+
 volumes:
   dbdata:
+  botdata:
