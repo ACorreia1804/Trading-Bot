@@ -7,6 +7,7 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,6 +40,29 @@ public class Bot {
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (Exception e) {
             // se o log falhar, não deve parar o bot
+        }
+    }
+
+    // ---- Base de dados: se falhar, o bot continua a funcionar ----
+    static void gravarVela(JsonNode k) {
+        try {
+            Db.guardarVela(SIMBOLO, INTERVALO,
+                    Instant.ofEpochMilli(k.get(6).asLong()),
+                    Double.parseDouble(k.get(1).asText()),
+                    Double.parseDouble(k.get(2).asText()),
+                    Double.parseDouble(k.get(3).asText()),
+                    Double.parseDouble(k.get(4).asText()),
+                    Double.parseDouble(k.get(5).asText()));
+        } catch (Exception e) {
+            log("AVISO: não foi possível gravar a vela na BD: " + e.getMessage());
+        }
+    }
+
+    static void gravarTrade(String lado, BigDecimal qtd, double preco, double valor, String orderId) {
+        try {
+            Db.guardarTrade(SIMBOLO, lado, qtd.doubleValue(), preco, valor, orderId, "TESTNET");
+        } catch (Exception e) {
+            log("AVISO: não foi possível gravar o trade na BD: " + e.getMessage());
         }
     }
 
@@ -83,6 +107,7 @@ public class Bot {
         emPosicao = true;
         guardarEstado();
         log(String.format("COMPRA: %s BTC a ~%.2f", quantidade.stripTrailingZeros().toPlainString(), precoEntrada));
+        gravarTrade("BUY", quantidade, precoEntrada, gasto, r.path("orderId").asText());
     }
 
     static void vender() throws Exception {
@@ -95,12 +120,17 @@ public class Bot {
             return;
         }
         double recebido = Double.parseDouble(r.get("cummulativeQuoteQty").asText());
-        double gasto = precoEntrada * quantidade.doubleValue();
+        BigDecimal qtdVendida = quantidade;
+        double gasto = precoEntrada * qtdVendida.doubleValue();
+        double precoVenda = qtdVendida.doubleValue() > 0 ? recebido / qtdVendida.doubleValue() : 0;
+        String orderId = r.path("orderId").asText();
+
         emPosicao = false;
         quantidade = BigDecimal.ZERO;
         precoEntrada = 0;
         guardarEstado();
         log(String.format("VENDA: recebido %.2f USDT | resultado %.2f USDT", recebido, recebido - gasto));
+        gravarTrade("SELL", qtdVendida, precoVenda, recebido, orderId);
     }
 
     static void ciclo() throws Exception {
@@ -125,6 +155,9 @@ public class Bot {
         long fechoUltima = v.get(ultima).get(6).asLong();
         if (fechoUltima == ultimaVela) return;
         ultimaVela = fechoUltima;
+
+        // grava a vela fechada na base de dados
+        gravarVela(v.get(ultima));
 
         List<Double> fechos = new ArrayList<>();
         for (int i = 0; i <= ultima; i++) {
