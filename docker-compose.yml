@@ -27,6 +27,20 @@ services:
     volumes:
       - botdata:/data
 
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: trading-grafana
+    restart: unless-stopped
+    depends_on:
+      - db
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - grafanadata:/var/lib/grafana
+
 volumes:
   dbdata:
   botdata:
+  grafanadata:
