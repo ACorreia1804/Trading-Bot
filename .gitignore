@@ -1,0 +1,5 @@
+target/
+bot.log
+estado.txt
+.vscode/
+.env
