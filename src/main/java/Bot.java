@@ -16,12 +16,13 @@ public class Bot {
 
     // ---- Parâmetros (podes mexer aqui) ----
     static final String SIMBOLO = "BTCUSDT";
-    static final String INTERVALO = "1m";   // só para testar; depois passa a "1h" ou "4h"
-    static final int RAPIDA = 5;
-    static final int LENTA = 20;
+    static final String INTERVALO = "4h";   // 1h, 4h ou 1d (o backfill só deve ser usado com estes)
+    static final int RAPIDA = 20;
+    static final int LENTA = 50;
     static final String VALOR_USDT = "100";
     static final double STOP_LOSS = 0.02;   // 2%
-    static final long ESPERA_MS = 10_000;   // verifica de 10 em 10 segundos
+    static final long ESPERA_MS = 60_000;   // verifica de 1 em 1 minuto
+    static final int BACKFILL_DIAS = 90;    // dias de histórico a preencher no arranque
 
     static final Path ESTADO = Path.of("estado.txt");
     static final Path LOG = Path.of("bot.log");
@@ -190,6 +191,14 @@ public class Bot {
         carregarEstado();
         log("Bot iniciado | " + SIMBOLO + " " + INTERVALO + " | médias " + RAPIDA + "/" + LENTA
                 + " | em posição: " + emPosicao);
+
+        // preenche na BD as velas que faltam (por exemplo, das horas em que o PC esteve desligado)
+        try {
+            int n = Backfill.preencher(SIMBOLO, INTERVALO, BACKFILL_DIAS);
+            log("Backfill: " + n + " velas novas gravadas na BD");
+        } catch (Exception e) {
+            log("AVISO: backfill falhou: " + e.getMessage());
+        }
 
         while (true) {
             try {
