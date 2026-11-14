@@ -1,7 +1,16 @@
 import org.ta4j.core.BarSeries;
+import org.ta4j.core.BaseBarSeriesBuilder;
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -21,6 +30,17 @@ import java.util.Map;
  * por isso o backtest é um pouco menos reativo).
  */
 public class Backtest3 {
+
+    // Allowlist fechada: o bot sÃ³ pode analisar estes cinco mercados.
+    static final List<Mercado> MERCADOS_PERMITIDOS = List.of(
+            new Mercado("Bitcoin", "BTC-USD"),
+            new Mercado("NASDAQ", "^IXIC"),
+            new Mercado("Oil", "CL=F"),
+            new Mercado("Gold", "GC=F"),
+            new Mercado("S&P 500", "^GSPC")
+    );
+
+    record Mercado(String nome, String simbolo) {}
 
     static final double CUSTO = 0.0015;
     static final int TENDENCIA = 200;   // período da média do filtro de tendência
@@ -93,12 +113,56 @@ public class Backtest3 {
         return (c[fim] / c[ini] - 1 - 2 * CUSTO) * 100;
     }
 
+    /** Carrega dados diÃ¡rios do Yahoo Finance para um mercado permitido. */
+    static BarSeries carregarMercado(Mercado mercado, int dias) throws Exception {
+        if (!MERCADOS_PERMITIDOS.contains(mercado)) {
+            throw new IllegalArgumentException("Mercado nÃ£o permitido: " + mercado.simbolo());
+        }
+
+        long agora = Instant.now().getEpochSecond();
+        long inicio = Instant.now().minus(Duration.ofDays(dias)).getEpochSecond();
+        String url = "https://query1.finance.yahoo.com/v8/finance/chart/"
+                + mercado.simbolo() + "?period1=" + inicio + "&period2=" + agora
+                + "&interval=1d&events=history";
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .header("User-Agent", "Mozilla/5.0")
+                .GET().build();
+        HttpResponse<String> response = HttpClient.newHttpClient()
+                .send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new IllegalStateException("Yahoo Finance devolveu HTTP " + response.statusCode()
+                    + " para " + mercado.nome());
+        }
+
+        JsonNode result = new ObjectMapper().readTree(response.body())
+                .path("chart").path("result").path(0);
+        if (result.isMissingNode()) {
+            throw new IllegalStateException("Sem dados para " + mercado.nome());
+        }
+        JsonNode timestamps = result.path("timestamp");
+        JsonNode closes = result.path("indicators").path("quote").path(0).path("close");
+        BarSeries series = new BaseBarSeriesBuilder().withName(mercado.nome()).build();
+        for (int i = 0; i < timestamps.size(); i++) {
+            JsonNode close = closes.get(i);
+            if (close == null || close.isNull()) continue;
+            ZonedDateTime fim = Instant.ofEpochSecond(timestamps.get(i).asLong())
+                    .atZone(ZoneId.of("UTC"));
+            double preco = close.asDouble();
+            series.addBar(Duration.ofDays(1), fim, preco, preco, preco, preco, 0);
+        }
+        return series;
+    }
+
     static void analisar(String nome, BarSeries s) {
         ClosePriceIndicator fecho = new ClosePriceIndicator(s);
         int n = s.getBarCount();
         double[] c = new double[n];
         for (int i = 0; i < n; i++) c[i] = fecho.getValue(i).doubleValue();
+        analisar(nome, c);
+    }
 
+    static void analisar(String nome, double[] c) {
+        int n = c.length;
         int iniTreino = AQUECIMENTO;
         int iniTeste = iniTreino + (int) ((n - iniTreino) * 0.6);
         int fimTreino = iniTeste - 1;
@@ -137,11 +201,12 @@ public class Backtest3 {
         System.out.printf("Buy & hold  -> treino %8.1f%%  | teste %8.1f%%%n", bhTreino, bhTeste);
         System.out.println("==================================================================");
 
-        // referência: a estratégia que o bot usa agora (20/50, sem filtro, stop 2% e sem alvo)
+        // referência: a estratégia dos bots (20/50, sem filtro, sem alvo; stop 2% ou 5%)
+        System.out.println("\nESTRATÉGIA DOS BOTS (20/50, stop 2% e 5%):");
         for (Linha l : linhas) {
             Params p = l.p();
-            if (p.rapida() == 20 && p.lenta() == 50 && !p.filtro() && p.stop() == 2 && p.alvo() == 0) {
-                System.out.println("\nESTRATÉGIA ATUAL DO BOT (20/50, stop 2%):");
+            if (p.rapida() == 20 && p.lenta() == 50 && !p.filtro() && (p.stop() == 2 || p.stop() == 5)
+                    && p.alvo() == 0) {
                 imprimir(l);
             }
         }
