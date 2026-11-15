@@ -354,8 +354,8 @@ public class Backtest3 {
         }
         candidatos.removeIf(x -> x.treino().trades() < 3);
         if (candidatos.isEmpty()) return;
-        candidatos.sort(Comparator.comparingDouble(x ->
-                x.treino().retorno() - 0.5 * x.treino().drawdown()).reversed());
+        candidatos.sort(Comparator.comparingDouble((Candidato x) ->
+        x.treino().retorno() - 0.5 * x.treino().drawdown()).reversed());
         Candidato melhor = candidatos.get(0);
         System.out.printf("  %-18s | %-15s | treino %7.1f%% DD %5.1f%% | teste %7.1f%% DD %5.1f%% | ops %d/%d%n",
                 melhor.estrategia(), melhor.timeframe().nome(), melhor.treino().retorno(),
