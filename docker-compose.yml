@@ -13,19 +13,21 @@ services:
       - dbdata:/var/lib/postgresql/data
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
 
-  bot:
+  # Bot dos 5 mercados (Alpaca PAPER). Substitui o antigo bot da Binance.
+  botmulti:
     build: .
-    container_name: trading-bot
+    container_name: trading-botmulti
     restart: unless-stopped
     depends_on:
       - db
+    command: ["java", "-cp", "/app/app.jar:/app/libs/*", "BotMulti"]
     environment:
-      BINANCE_TESTNET_KEY: ${BINANCE_TESTNET_KEY}
-      BINANCE_TESTNET_SECRET: ${BINANCE_TESTNET_SECRET}
+      ALPACA_KEY: ${ALPACA_KEY}
+      ALPACA_SECRET: ${ALPACA_SECRET}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       DB_URL: jdbc:postgresql://db:5432/trading
     volumes:
-      - botdata:/data
+      - botmultidata:/data
 
   grafana:
     image: grafana/grafana:11.2.0
@@ -42,5 +44,5 @@ services:
 
 volumes:
   dbdata:
-  botdata:
+  botmultidata:
   grafanadata:
