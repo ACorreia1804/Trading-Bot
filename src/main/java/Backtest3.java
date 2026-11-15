@@ -11,6 +11,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -41,6 +42,17 @@ public class Backtest3 {
     );
 
     record Mercado(String nome, String simbolo) {}
+
+    record Timeframe(String nome, String yahooInterval, Duration duracao, int dias) {}
+
+    static final List<Timeframe> TIMEFRAMES = List.of(
+            new Timeframe("Diário", "1d", Duration.ofDays(1), 1800),
+            new Timeframe("Semanal", "1wk", Duration.ofDays(7), 3650),
+            new Timeframe("Mensal", "1mo", Duration.ofDays(30), 3650)
+    );
+
+    record Candidato(String estrategia, int parametroA, int parametroB, double limiar,
+                     Timeframe timeframe, Resultado treino, Resultado teste) {}
 
     static final double CUSTO = 0.0015;
     static final int TENDENCIA = 200;   // período da média do filtro de tendência
@@ -115,15 +127,21 @@ public class Backtest3 {
 
     /** Carrega dados diÃ¡rios do Yahoo Finance para um mercado permitido. */
     static BarSeries carregarMercado(Mercado mercado, int dias) throws Exception {
+        return carregarMercado(mercado, dias, "1d", Duration.ofDays(1));
+    }
+
+    static BarSeries carregarMercado(Mercado mercado, int dias, String intervalo,
+                                     Duration duracao) throws Exception {
         if (!MERCADOS_PERMITIDOS.contains(mercado)) {
             throw new IllegalArgumentException("Mercado nÃ£o permitido: " + mercado.simbolo());
         }
 
         long agora = Instant.now().getEpochSecond();
         long inicio = Instant.now().minus(Duration.ofDays(dias)).getEpochSecond();
+        String simboloUrl = mercado.simbolo().replace("^", "%5E").replace("=", "%3D");
         String url = "https://query1.finance.yahoo.com/v8/finance/chart/"
-                + mercado.simbolo() + "?period1=" + inicio + "&period2=" + agora
-                + "&interval=1d&events=history";
+                + simboloUrl + "?period1=" + inicio + "&period2=" + agora
+                + "&interval=" + intervalo + "&events=history";
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                 .header("User-Agent", "Mozilla/5.0")
                 .GET().build();
@@ -148,7 +166,7 @@ public class Backtest3 {
             ZonedDateTime fim = Instant.ofEpochSecond(timestamps.get(i).asLong())
                     .atZone(ZoneId.of("UTC"));
             double preco = close.asDouble();
-            series.addBar(Duration.ofDays(1), fim, preco, preco, preco, preco, 0);
+            series.addBar(duracao, fim, preco, preco, preco, preco, 0);
         }
         return series;
     }
@@ -247,12 +265,129 @@ public class Backtest3 {
                 l.teste().retorno(), l.teste().trades(), l.teste().drawdown());
     }
 
-    public static void main(String[] args) throws Exception {
-        System.out.println("A descarregar dados (pode demorar um minuto)...\n");
-        BarSeries h4 = Historico.carregar("BTCUSDT", "4h", Duration.ofHours(4), 1800);
-        BarSeries diario = Historico.carregar("BTCUSDT", "1d", Duration.ofDays(1), 1800);
+    static double desvio(double[] c, int fim, int periodo, double media) {
+        double soma = 0;
+        for (int i = fim - periodo + 1; i <= fim; i++) {
+            double d = c[i] - media;
+            soma += d * d;
+        }
+        return Math.sqrt(soma / periodo);
+    }
 
-        analisar("4 HORAS", h4);
-        analisar("DIÁRIO", diario);
+    static Resultado simularSinais(double[] c, boolean[] entradas, boolean[] saidas,
+                                   int ini, int fim) {
+        double equity = 1, pico = 1, maxDD = 0, entrada = 0, base = 0, equityAntes = 1;
+        boolean dentro = false;
+        int trades = 0, ganhos = 0;
+        for (int i = ini; i <= fim; i++) {
+            if (dentro) {
+                equity = base * c[i] / entrada;
+                pico = Math.max(pico, equity);
+                maxDD = Math.max(maxDD, (pico - equity) / pico);
+                if (saidas[i] || i == fim) {
+                    equity *= 1 - CUSTO;
+                    trades++;
+                    if (equity > equityAntes) ganhos++;
+                    dentro = false;
+                    pico = Math.max(pico, equity);
+                }
+            } else if (entradas[i] && i < fim) {
+                equityAntes = equity;
+                base = equity * (1 - CUSTO);
+                entrada = c[i];
+                dentro = true;
+            }
+        }
+        return new Resultado((equity - 1) * 100, trades,
+                trades == 0 ? 0 : 100.0 * ganhos / trades, maxDD * 100);
+    }
+
+    static Candidato avaliarCandidato(double[] c, String estrategia, int a, int b,
+                                      double limiar, Timeframe timeframe) {
+        int n = c.length;
+        boolean[] entradas = new boolean[n], saidas = new boolean[n];
+        double[] rapida = sma(c, a);
+        double[] lenta = b > 0 ? sma(c, b) : rapida;
+        int aquecimento = Math.max(a, b) + 1;
+        boolean dentro = false;
+        for (int i = aquecimento; i < n; i++) {
+            boolean entrar;
+            boolean sair;
+            if (estrategia.equals("Reversão à média")) {
+                double desvio = desvio(c, i, a, rapida[i]);
+                entrar = desvio > 0 && c[i] < rapida[i] - limiar * desvio;
+                sair = c[i] >= rapida[i];
+            } else if (estrategia.equals("Momentum")) {
+                double retorno = c[i] / c[i - a] - 1;
+                entrar = retorno > limiar;
+                sair = retorno < 0;
+            } else {
+                entrar = rapida[i - 1] <= lenta[i - 1] && rapida[i] > lenta[i];
+                sair = rapida[i] < lenta[i];
+            }
+            entradas[i] = !dentro && entrar;
+            saidas[i] = dentro && sair;
+            if (entradas[i]) dentro = true;
+            if (saidas[i]) dentro = false;
+        }
+        int iniTreino = aquecimento;
+        int iniTeste = iniTreino + (int) ((n - iniTreino) * 0.6);
+        Resultado treino = simularSinais(c, entradas, saidas, iniTreino, iniTeste - 1);
+        Resultado teste = simularSinais(c, entradas, saidas, iniTeste, n - 1);
+        return new Candidato(estrategia, a, b, limiar, timeframe, treino, teste);
+    }
+
+    static void escolherEstrategia(Mercado mercado, Timeframe timeframe, double[] c) {
+        List<Candidato> candidatos = new ArrayList<>();
+        for (int periodo : new int[]{10, 20, 30, 50}) {
+            for (double limiar : new double[]{0.5, 1.0, 1.5}) {
+                candidatos.add(avaliarCandidato(c, "Reversão à média", periodo, 0, limiar, timeframe));
+            }
+        }
+        for (int periodo : new int[]{5, 10, 20, 50}) {
+            for (double limiar : new double[]{0.0, 0.02, 0.05}) {
+                candidatos.add(avaliarCandidato(c, "Momentum", periodo, 0, limiar, timeframe));
+            }
+        }
+        for (int[] par : new int[][]{{5, 20}, {10, 30}, {20, 50}, {50, 100}}) {
+            candidatos.add(avaliarCandidato(c, "Trend following", par[0], par[1], 0, timeframe));
+        }
+        candidatos.removeIf(x -> x.treino().trades() < 3);
+        if (candidatos.isEmpty()) return;
+        candidatos.sort(Comparator.comparingDouble(x ->
+                x.treino().retorno() - 0.5 * x.treino().drawdown()).reversed());
+        Candidato melhor = candidatos.get(0);
+        System.out.printf("  %-18s | %-15s | treino %7.1f%% DD %5.1f%% | teste %7.1f%% DD %5.1f%% | ops %d/%d%n",
+                melhor.estrategia(), melhor.timeframe().nome(), melhor.treino().retorno(),
+                melhor.treino().drawdown(), melhor.teste().retorno(), melhor.teste().drawdown(),
+                melhor.treino().trades(), melhor.teste().trades());
+    }
+
+    static void otimizarMercado(Mercado mercado) throws Exception {
+        System.out.println("\n=== " + mercado.nome() + " (" + mercado.simbolo() + ") ===");
+        for (Timeframe timeframe : TIMEFRAMES) {
+            BarSeries series = carregarMercado(mercado, timeframe.dias(),
+                    timeframe.yahooInterval(), timeframe.duracao());
+            if (series.getBarCount() < 220) {
+                System.out.println("  " + timeframe.nome() + ": dados insuficientes");
+                continue;
+            }
+            double[] c = new double[series.getBarCount()];
+            ClosePriceIndicator fecho = new ClosePriceIndicator(series);
+            for (int i = 0; i < c.length; i++) c[i] = fecho.getValue(i).doubleValue();
+            escolherEstrategia(mercado, timeframe, c);
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        System.out.println("A descarregar dados dos cinco mercados permitidos...\n");
+        for (Mercado mercado : MERCADOS_PERMITIDOS) {
+            try {
+                otimizarMercado(mercado);
+            } catch (Exception e) {
+                System.err.println("Nao foi possivel carregar " + mercado.nome() + ": " + e.getMessage());
+            }
+        }
+
     }
 }
