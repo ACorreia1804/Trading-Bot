@@ -29,20 +29,23 @@ services:
     volumes:
       - botmultidata:/data
 
-  grafana:
-    image: grafana/grafana:11.2.0
-    container_name: trading-grafana
+  # Painel web (gráficos, conselhos e resultados): http://localhost:8080
+  painel:
+    build: .
+    container_name: trading-painel
     restart: unless-stopped
     depends_on:
       - db
-    ports:
-      - "127.0.0.1:3000:3000"
+    command: ["java", "-cp", "/app/app.jar:/app/libs/*", "Painel"]
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
-    volumes:
-      - grafanadata:/var/lib/grafana
+      ALPACA_KEY: ${ALPACA_KEY}
+      ALPACA_SECRET: ${ALPACA_SECRET}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_URL: jdbc:postgresql://db:5432/trading
+      PAINEL_BIND: 0.0.0.0
+    ports:
+      - "127.0.0.1:8080:8080"
 
 volumes:
   dbdata:
   botmultidata:
-  grafanadata:

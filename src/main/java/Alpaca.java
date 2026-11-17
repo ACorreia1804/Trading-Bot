@@ -69,7 +69,19 @@ public class Alpaca {
         } else {
             b.method(metodo, HttpRequest.BodyPublishers.noBody());
         }
-        HttpResponse<String> r = CLIENT.send(b.build(), HttpResponse.BodyHandlers.ofString());
+        HttpRequest pedido = b.build();
+        HttpResponse<String> r;
+        int tentativas = metodo.equals("GET") ? 3 : 1; // ligações paradas fechadas pelo servidor: repete só leituras
+        int tentativa = 0;
+        while (true) {
+            try {
+                r = CLIENT.send(pedido, HttpResponse.BodyHandlers.ofString());
+                break;
+            } catch (java.io.IOException e) {
+                if (++tentativa >= tentativas) throw e;
+                Thread.sleep(500);
+            }
+        }
         String texto = r.body() == null ? "" : r.body();
         if (r.statusCode() >= 400) throw new ErroHttp(r.statusCode(), texto);
         return texto.isBlank() ? MAPPER.createObjectNode() : MAPPER.readTree(texto);
